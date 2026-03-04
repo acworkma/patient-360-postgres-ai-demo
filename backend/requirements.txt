@@ -13,9 +13,9 @@ pg8000>=1.30.0
 pydantic>=2.5.0
 pydantic-settings>=2.1.0
 
-# Azure services (optional, for direct SDK calls if needed)
+# Azure AI Foundry (replaces deprecated standalone Azure OpenAI)
+azure-ai-projects>=2.0.0b1
 azure-ai-textanalytics>=5.3.0
-openai>=1.12.0
 azure-identity>=1.15.0
 
 # Utilities

@@ -1,7 +1,8 @@
 """
 Patient 360 Backend - LLM Service
 
-Generates grounded answers using Azure OpenAI Responses API or template fallback.
+Generates grounded answers using Azure AI Foundry inference (preferred)
+or legacy Azure OpenAI Responses API, with template fallback.
 Supports both standard and streaming responses.
 """
 
@@ -10,42 +11,50 @@ import json
 import logging
 from typing import AsyncGenerator, Optional, Tuple
 
-from openai import OpenAI
-
 from app.settings import get_settings
 from app.schemas import CopilotSource
 
 logger = logging.getLogger(__name__)
 
 
-def _create_azure_openai_client(settings) -> OpenAI:
+def _create_inference_client(settings):
     """
-    Create an OpenAI client using Entra ID auth (DefaultAzureCredential)
-    if no API key is provided, otherwise use the API key.
-    
-    Note: A new client is created per-request, so the token is always fresh.
+    Create an OpenAI-compatible chat client via Azure AI Foundry project
+    (preferred) or legacy Azure OpenAI endpoint.
+
+    Returns an OpenAI-compatible client that supports .responses.create().
     """
+    if settings.has_foundry:
+        from azure.ai.projects import AIProjectClient
+        from azure.identity import DefaultAzureCredential
+
+        project_client = AIProjectClient.from_connection_string(
+            credential=DefaultAzureCredential(),
+            conn_str=settings.azure_ai_project_connection_string,
+        )
+        # get_chat_completions_client returns an OpenAI-compatible client
+        return project_client.inference.get_chat_completions_client()
+
+    # Legacy path: direct Azure OpenAI endpoint
+    from openai import OpenAI
+
     endpoint = settings.azure_openai_endpoint.rstrip('/')
     base_url = f"{endpoint}/openai/v1/"
 
     if settings.azure_openai_key:
-        # Key-based auth
         return OpenAI(api_key=settings.azure_openai_key, base_url=base_url)
     else:
-        # Entra ID (Azure AD) token-based auth
         from azure.identity import DefaultAzureCredential, get_bearer_token_provider
         credential = DefaultAzureCredential()
         token_provider = get_bearer_token_provider(
             credential, "https://cognitiveservices.azure.com/.default"
         )
         token = token_provider()
-        logger.info("Using Entra ID authentication for Azure OpenAI")
+        logger.info("Using Entra ID authentication for Azure OpenAI (legacy)")
         return OpenAI(
-            api_key="entra-id-auth",  # placeholder, not used with bearer token
+            api_key="entra-id-auth",
             base_url=base_url,
-            default_headers={
-                "Authorization": f"Bearer {token}"
-            },
+            default_headers={"Authorization": f"Bearer {token}"},
         )
 
 
@@ -124,22 +133,21 @@ async def generate_answer(
     settings = get_settings()
     
     if settings.has_azure_openai:
-        return await _generate_with_openai(question, patient_name, sources, settings)
+        return await _generate_with_inference(question, patient_name, sources, settings)
     else:
         return _generate_template_response(question, patient_name, sources)
 
 
-async def _generate_with_openai(
+async def _generate_with_inference(
     question: str,
     patient_name: str,
     sources: list[CopilotSource],
     settings
 ) -> Tuple[str, list[str], str]:
-    """Generate answer using Azure OpenAI Responses API (/v1 endpoint)."""
+    """Generate answer using Azure AI Foundry or legacy Azure OpenAI Responses API."""
     
     try:
-        # Responses API uses the standard OpenAI client with /openai/v1/ base_url
-        client = _create_azure_openai_client(settings)
+        client = _create_inference_client(settings)
         
         # Build context and prompt using shared helper
         _, user_input = _build_context_and_prompt(question, patient_name, sources)
@@ -164,12 +172,12 @@ async def _generate_with_openai(
         
         model_name = settings.azure_openai_chat_deployment
         
-        logger.info(f"Generated answer using Azure OpenAI Responses API ({model_name})")
+        logger.info(f"Generated answer using inference ({model_name})")
         
         return answer, next_actions, model_name
         
     except Exception as e:
-        logger.error(f"Azure OpenAI Responses API error: {str(e)}. Falling back to template response.")
+        logger.error(f"Inference API error: {str(e)}. Falling back to template response.")
         return _generate_template_response(question, patient_name, sources)
 
 
@@ -222,8 +230,8 @@ async def generate_answer_stream(
         return
     
     try:
-        # Stream from Azure OpenAI Responses API
-        async for event_str in _stream_with_openai(question, patient_name, sources, settings):
+        # Stream from inference API (Foundry or legacy Azure OpenAI)
+        async for event_str in _stream_with_inference(question, patient_name, sources, settings):
             yield event_str
             
     except Exception as e:
@@ -231,16 +239,16 @@ async def generate_answer_stream(
         yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
 
 
-async def _stream_with_openai(
+async def _stream_with_inference(
     question: str,
     patient_name: str,
     sources: list[CopilotSource],
     settings
 ) -> AsyncGenerator[str, None]:
-    """Stream answer using Azure OpenAI Responses API with stream=True."""
+    """Stream answer using Responses API (via Foundry or legacy Azure OpenAI)."""
     
     # Setup client
-    client = _create_azure_openai_client(settings)
+    client = _create_inference_client(settings)
     
     # First, send all sources
     for source in sources:
@@ -291,7 +299,7 @@ async def _stream_with_openai(
     # Send done event
     yield f"event: done\ndata: {json.dumps({'model': settings.azure_openai_chat_deployment, 'retrieval_method': 'vector'})}\n\n"
     
-    logger.info(f"Streamed answer using Azure OpenAI Responses API ({settings.azure_openai_chat_deployment})")
+    logger.info(f"Streamed answer using inference ({settings.azure_openai_chat_deployment})")
 
 
 def _parse_llm_response(response_text: str) -> Tuple[str, list[str]]:

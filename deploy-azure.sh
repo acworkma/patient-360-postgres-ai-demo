@@ -11,35 +11,49 @@
 set -e
 
 # -----------------------------------------------------------------------------
-# Configuration - UPDATE THESE VALUES
+# Source pre-deploy output if available (auto-fills config below)
 # -----------------------------------------------------------------------------
-RESOURCE_GROUP="patient360-rg"
-LOCATION="eastus"
-ACR_NAME="patient360acr"  # Must be globally unique, lowercase, no dashes
+if [[ -f "pre-deploy-output.env" ]]; then
+    echo "📂 Loading configuration from pre-deploy-output.env"
+    set -a
+    # shellcheck disable=SC1091
+    source pre-deploy-output.env
+    set +a
+fi
+
+# -----------------------------------------------------------------------------
+# Configuration - UPDATE THESE VALUES (or run pre-deploy.sh first)
+# -----------------------------------------------------------------------------
+RESOURCE_GROUP="${RESOURCE_GROUP:-patient360-rg}"
+LOCATION="${LOCATION:-eastus2}"
+ACR_NAME="${ACR_NAME:-patient360acr}"  # Must be globally unique, lowercase, no dashes
 
 # Container Apps
-CONTAINER_ENV_NAME="patient360-env"
-BACKEND_APP_NAME="patient360-backend"
+CONTAINER_ENV_NAME="${CONTAINER_ENV_NAME:-patient360-env}"
+BACKEND_APP_NAME="${BACKEND_APP_NAME:-patient360-backend}"
 
 # Web App
-APP_SERVICE_PLAN="patient360-plan"
-FRONTEND_APP_NAME="patient360-frontend"  # Must be globally unique
+APP_SERVICE_PLAN="${APP_SERVICE_PLAN:-patient360-plan}"
+FRONTEND_APP_NAME="${FRONTEND_APP_NAME:-patient360-frontend}"  # Must be globally unique
 
-# Database (your existing Azure PostgreSQL)
-DB_HOST="your-server.postgres.database.azure.com"
-DB_NAME="postgres"
-DB_USER="your-admin"
-DB_PASSWORD="your-password"
+# Database (set by pre-deploy.sh or override here)
+DB_HOST="${DB_HOST:-your-server.postgres.database.azure.com}"
+DB_NAME="${DB_NAME:-patient360}"
+DB_USER="${DB_USER:-pgadmin}"
+DB_PASSWORD="${DB_PASSWORD:-your-password}"
 
-# Azure AI Services
-AZURE_AI_ENDPOINT="https://your-ai.cognitiveservices.azure.com"
-AZURE_AI_KEY="your-azure-ai-key"
+# Azure AI Services (set by pre-deploy.sh or override here)
+AZURE_AI_ENDPOINT="${AZURE_AI_ENDPOINT:-https://your-ai.cognitiveservices.azure.com}"
+AZURE_AI_KEY="${AZURE_AI_KEY:-your-azure-ai-key}"
 
-# Azure OpenAI (optional)
-AZURE_OPENAI_ENDPOINT="https://your-openai.openai.azure.com"
-AZURE_OPENAI_KEY="your-openai-key"
-AZURE_OPENAI_CHAT_DEPLOYMENT="gpt-4o"
-AZURE_OPENAI_EMBEDDING_DEPLOYMENT="text-embedding-3-small"
+# Azure AI Foundry / AI Services (set by pre-deploy.sh or override here)
+AZURE_AI_SERVICES_ENDPOINT="${AZURE_AI_SERVICES_ENDPOINT:-}"
+AZURE_AI_SERVICES_KEY="${AZURE_AI_SERVICES_KEY:-}"
+AZURE_AI_PROJECT_ENDPOINT="${AZURE_AI_PROJECT_ENDPOINT:-}"
+
+# Model deployments
+AZURE_OPENAI_CHAT_DEPLOYMENT="${AZURE_OPENAI_CHAT_DEPLOYMENT:-gpt-4o}"
+AZURE_OPENAI_EMBEDDING_DEPLOYMENT="${AZURE_OPENAI_EMBEDDING_DEPLOYMENT:-text-embedding-3-small}"
 
 # -----------------------------------------------------------------------------
 # Step 1: Create Resource Group
@@ -129,8 +143,8 @@ az containerapp create \
         DATABASE_URL="$DATABASE_URL" \
         AZURE_AI_ENDPOINT="$AZURE_AI_ENDPOINT" \
         AZURE_AI_KEY="$AZURE_AI_KEY" \
-        AZURE_OPENAI_ENDPOINT="$AZURE_OPENAI_ENDPOINT" \
-        AZURE_OPENAI_KEY="$AZURE_OPENAI_KEY" \
+        AZURE_AI_PROJECT_CONNECTION_STRING="$AZURE_AI_PROJECT_ENDPOINT" \
+        AZURE_OPENAI_ENDPOINT="$AZURE_AI_SERVICES_ENDPOINT" \
         AZURE_OPENAI_CHAT_DEPLOYMENT="$AZURE_OPENAI_CHAT_DEPLOYMENT" \
         AZURE_OPENAI_EMBEDDING_DEPLOYMENT="$AZURE_OPENAI_EMBEDDING_DEPLOYMENT" \
         CORS_ORIGINS="https://${FRONTEND_APP_NAME}.azurewebsites.net,http://localhost:3000" \

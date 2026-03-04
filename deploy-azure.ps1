@@ -10,37 +10,50 @@
 $ErrorActionPreference = "Stop"
 
 # -----------------------------------------------------------------------------
-# Configuration - UPDATE THESE VALUES
+# Source pre-deploy output if available (auto-fills config below)
 # -----------------------------------------------------------------------------
-$RESOURCE_GROUP = "patient360-rg"
-$LOCATION = "eastus"
-$ACR_NAME = "patient360acr"  # Must be globally unique, lowercase, no dashes
+if (Test-Path "pre-deploy-output.env") {
+    Write-Host "📂 Loading configuration from pre-deploy-output.env" -ForegroundColor Cyan
+    Get-Content "pre-deploy-output.env" | ForEach-Object {
+        if ($_ -match '^\s*([^#][^=]+)=(.*)$') {
+            [System.Environment]::SetEnvironmentVariable($Matches[1].Trim(), $Matches[2].Trim(), "Process")
+        }
+    }
+}
+
+# -----------------------------------------------------------------------------
+# Configuration - UPDATE THESE VALUES (or run pre-deploy.ps1 first)
+# -----------------------------------------------------------------------------
+$RESOURCE_GROUP = if ($env:RESOURCE_GROUP) { $env:RESOURCE_GROUP } else { "patient360-rg" }
+$LOCATION = if ($env:LOCATION) { $env:LOCATION } else { "eastus2" }
+$ACR_NAME = if ($env:ACR_NAME) { $env:ACR_NAME } else { "patient360acr" }  # Must be globally unique, lowercase, no dashes
 
 # Container Apps
-$CONTAINER_ENV_NAME = "patient360-env"
-$BACKEND_APP_NAME = "patient360-backend"
+$CONTAINER_ENV_NAME = if ($env:CONTAINER_ENV_NAME) { $env:CONTAINER_ENV_NAME } else { "patient360-env" }
+$BACKEND_APP_NAME = if ($env:BACKEND_APP_NAME) { $env:BACKEND_APP_NAME } else { "patient360-backend" }
 
 # Web App
-$APP_SERVICE_PLAN = "patient360-plan"
-$FRONTEND_APP_NAME = "patient360-frontend"  # Must be globally unique
+$APP_SERVICE_PLAN = if ($env:APP_SERVICE_PLAN) { $env:APP_SERVICE_PLAN } else { "patient360-plan" }
+$FRONTEND_APP_NAME = if ($env:FRONTEND_APP_NAME) { $env:FRONTEND_APP_NAME } else { "patient360-frontend" }  # Must be globally unique
 
-# Database (your existing Azure PostgreSQL)
-# Set these as environment variables or update before running:
-#   $env:DB_HOST, $env:DB_PASSWORD, $env:AZURE_AI_KEY, $env:AZURE_OPENAI_KEY
+# Database (set by pre-deploy.ps1 or override here)
 $DB_HOST = if ($env:DB_HOST) { $env:DB_HOST } else { "your-db.postgres.database.azure.com" }
-$DB_NAME = if ($env:DB_NAME) { $env:DB_NAME } else { "postgres" }
+$DB_NAME = if ($env:DB_NAME) { $env:DB_NAME } else { "patient360" }
 $DB_USER = if ($env:DB_USER) { $env:DB_USER } else { "pgadmin" }
 $DB_PASSWORD = if ($env:DB_PASSWORD) { $env:DB_PASSWORD } else { throw "Set `$env:DB_PASSWORD before running" }
 
-# Azure AI Services
+# Azure AI Language
 $AZURE_AI_ENDPOINT = if ($env:AZURE_AI_ENDPOINT) { $env:AZURE_AI_ENDPOINT } else { "https://your-language-service.cognitiveservices.azure.com" }
 $AZURE_AI_KEY = if ($env:AZURE_AI_KEY) { $env:AZURE_AI_KEY } else { throw "Set `$env:AZURE_AI_KEY before running" }
 
-# Azure OpenAI
-$AZURE_OPENAI_ENDPOINT = if ($env:AZURE_OPENAI_ENDPOINT) { $env:AZURE_OPENAI_ENDPOINT } else { "https://your-openai.openai.azure.com" }
-$AZURE_OPENAI_KEY = if ($env:AZURE_OPENAI_KEY) { $env:AZURE_OPENAI_KEY } else { throw "Set `$env:AZURE_OPENAI_KEY before running" }
+# Azure AI Foundry / AI Services (set by pre-deploy.ps1 or override here)
+$AZURE_AI_SERVICES_ENDPOINT = if ($env:AZURE_AI_SERVICES_ENDPOINT) { $env:AZURE_AI_SERVICES_ENDPOINT } else { "" }
+$AZURE_AI_SERVICES_KEY = if ($env:AZURE_AI_SERVICES_KEY) { $env:AZURE_AI_SERVICES_KEY } else { "" }
+$AZURE_AI_PROJECT_ENDPOINT = if ($env:AZURE_AI_PROJECT_ENDPOINT) { $env:AZURE_AI_PROJECT_ENDPOINT } else { "" }
+
+# Model deployments
 $AZURE_OPENAI_CHAT_DEPLOYMENT = if ($env:AZURE_OPENAI_CHAT_DEPLOYMENT) { $env:AZURE_OPENAI_CHAT_DEPLOYMENT } else { "gpt-4o" }
-$AZURE_OPENAI_EMBEDDING_DEPLOYMENT = if ($env:AZURE_OPENAI_EMBEDDING_DEPLOYMENT) { $env:AZURE_OPENAI_EMBEDDING_DEPLOYMENT } else { "text-embedding-ada-002" }
+$AZURE_OPENAI_EMBEDDING_DEPLOYMENT = if ($env:AZURE_OPENAI_EMBEDDING_DEPLOYMENT) { $env:AZURE_OPENAI_EMBEDDING_DEPLOYMENT } else { "text-embedding-3-small" }
 
 # -----------------------------------------------------------------------------
 # Step 1: Create Resource Group
@@ -128,8 +141,8 @@ az containerapp create `
         "DATABASE_URL=$DATABASE_URL" `
         "AZURE_AI_ENDPOINT=$AZURE_AI_ENDPOINT" `
         "AZURE_AI_KEY=$AZURE_AI_KEY" `
-        "AZURE_OPENAI_ENDPOINT=$AZURE_OPENAI_ENDPOINT" `
-        "AZURE_OPENAI_KEY=$AZURE_OPENAI_KEY" `
+        "AZURE_AI_PROJECT_CONNECTION_STRING=$AZURE_AI_PROJECT_ENDPOINT" `
+        "AZURE_OPENAI_ENDPOINT=$AZURE_AI_SERVICES_ENDPOINT" `
         "AZURE_OPENAI_CHAT_DEPLOYMENT=$AZURE_OPENAI_CHAT_DEPLOYMENT" `
         "AZURE_OPENAI_EMBEDDING_DEPLOYMENT=$AZURE_OPENAI_EMBEDDING_DEPLOYMENT" `
         "CORS_ORIGINS=https://${FRONTEND_APP_NAME}.azurewebsites.net,http://localhost:3000" `
