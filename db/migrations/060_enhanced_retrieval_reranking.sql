@@ -218,7 +218,7 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION retrieve_context IS 'Two-stage RAG retrieval with semantic reranking via azure_ai.rank()';
+COMMENT ON FUNCTION retrieve_context(TEXT, TEXT, INT, INT) IS 'Two-stage RAG retrieval with semantic reranking via azure_ai.rank()';
 
 -- ----------------------------------------------------------------------------
 -- Function: retrieve_context_simple (Without reranking - for comparison)

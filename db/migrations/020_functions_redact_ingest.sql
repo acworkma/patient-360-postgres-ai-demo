@@ -374,7 +374,7 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION retrieve_context IS 'Retrieves relevant context for RAG using vector/keyword search';
+COMMENT ON FUNCTION retrieve_context(TEXT, TEXT, INT) IS 'Retrieves relevant context for RAG using vector/keyword search';
 
 -- ----------------------------------------------------------------------------
 -- Function: search_notes_vector

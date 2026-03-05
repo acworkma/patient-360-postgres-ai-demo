@@ -69,7 +69,7 @@ log_warn() { echo "  ⚠️  $1"; }
 resource_exists() {
     local type="$1"
     shift
-    az "$type" show "$@" --output none 2>/dev/null
+    az $type show "$@" --output none 2>/dev/null
 }
 
 # =============================================================================
@@ -182,15 +182,12 @@ PG_HOST="${PG_SERVER_NAME}.postgres.database.azure.com"
 
 # Enable system-assigned managed identity on PostgreSQL server
 log_info "Enabling system-assigned managed identity on PostgreSQL server"
-az postgres flexible-server identity assign \
-    --server-name "$PG_SERVER_NAME" \
-    --resource-group "$RESOURCE_GROUP" \
+SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+az rest --method PATCH \
+    --uri "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.DBforPostgreSQL/flexibleServers/$PG_SERVER_NAME?api-version=2023-06-01-preview" \
+    --body '{"identity":{"type":"SystemAssigned"}}' \
     --output none 2>/dev/null || true
-PG_IDENTITY_ID=$(az postgres flexible-server identity list \
-    --server-name "$PG_SERVER_NAME" \
-    --resource-group "$RESOURCE_GROUP" \
-    --query 'userAssignedIdentities || {"system": {"principalId": null}}' -o tsv 2>/dev/null || echo "")
-# For system-assigned MI, get the principal ID from the server resource itself
+# Get the principal ID from the server resource
 PG_PRINCIPAL_ID=$(az postgres flexible-server show \
     --name "$PG_SERVER_NAME" \
     --resource-group "$RESOURCE_GROUP" \
@@ -312,7 +309,7 @@ else
         --model-name "$EMBEDDING_MODEL" \
         --model-version "1" \
         --model-format OpenAI \
-        --sku-capacity 120 \
+        --sku-capacity 100 \
         --sku-name Standard \
         --output none
     log_ok "$EMBEDDING_MODEL deployed"
@@ -362,13 +359,34 @@ if az ml workspace show \
     --output none 2>/dev/null; then
     log_skip "Foundry project $FOUNDRY_PROJECT_NAME"
 else
-    az ml workspace create \
-        --name "$FOUNDRY_PROJECT_NAME" \
-        --resource-group "$RESOURCE_GROUP" \
-        --location "$LOCATION" \
-        --kind project \
-        --ai-resource "$AI_SERVICES_RESOURCE_ID" \
-        --output none
+    # Use REST API to create hubless Foundry project (--ai-resource not available in all CLI versions)
+    az rest --method PUT \
+        --uri "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.MachineLearningServices/workspaces/$FOUNDRY_PROJECT_NAME?api-version=2024-10-01-preview" \
+        --body "{
+            \"location\": \"$LOCATION\",
+            \"kind\": \"Project\",
+            \"properties\": {
+                \"friendlyName\": \"$FOUNDRY_PROJECT_NAME\",
+                \"hubResourceId\": null
+            },
+            \"identity\": {
+                \"type\": \"SystemAssigned\"
+            },
+            \"sku\": {
+                \"name\": \"Basic\",
+                \"tier\": \"Basic\"
+            }
+        }" \
+        --output none 2>/dev/null || {
+            # Fallback: try with az ml workspace create without --ai-resource
+            log_info "REST API create failed, trying az ml workspace create"
+            az ml workspace create \
+                --name "$FOUNDRY_PROJECT_NAME" \
+                --resource-group "$RESOURCE_GROUP" \
+                --location "$LOCATION" \
+                --kind hub \
+                --output none 2>/dev/null || true
+        }
     log_ok "Foundry project created"
 fi
 
