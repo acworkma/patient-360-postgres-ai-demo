@@ -47,6 +47,7 @@ AZURE_AI_ENDPOINT="${AZURE_AI_ENDPOINT:-https://your-ai.cognitiveservices.azure.
 AZURE_AI_KEY="${AZURE_AI_KEY:-}"  # Optional: omit when using managed identity
 
 # Azure AI Foundry / AI Services (set by pre-deploy.sh or override here)
+AI_SERVICES_NAME="${AI_SERVICES_NAME:-patient360-aiservices}"
 AZURE_AI_SERVICES_ENDPOINT="${AZURE_AI_SERVICES_ENDPOINT:-}"
 AZURE_AI_SERVICES_KEY="${AZURE_AI_SERVICES_KEY:-}"
 AZURE_AI_PROJECT_ENDPOINT="${AZURE_AI_PROJECT_ENDPOINT:-}"
@@ -195,6 +196,34 @@ BACKEND_URL=$(az containerapp show \
     --query properties.configuration.ingress.fqdn -o tsv)
 
 echo "✅ Backend deployed: https://$BACKEND_URL"
+
+# Enable system-assigned managed identity on the backend container app
+echo "🔐 Enabling managed identity on backend container app..."
+BACKEND_PRINCIPAL_ID=$(az containerapp identity assign \
+    --name $BACKEND_APP_NAME \
+    --resource-group $RESOURCE_GROUP \
+    --system-assigned \
+    --query principalId -o tsv 2>/dev/null || \
+    az containerapp show --name $BACKEND_APP_NAME --resource-group $RESOURCE_GROUP \
+    --query identity.principalId -o tsv)
+
+# Grant "Cognitive Services User" role on the AI Services resource
+AI_SERVICES_RESOURCE_ID=$(az cognitiveservices account show \
+    --name "${AI_SERVICES_NAME:-patient360-aiservices}" \
+    --resource-group $RESOURCE_GROUP \
+    --query id -o tsv 2>/dev/null || echo "")
+
+if [[ -n "$AI_SERVICES_RESOURCE_ID" && -n "$BACKEND_PRINCIPAL_ID" ]]; then
+    az role assignment create \
+        --assignee-object-id "$BACKEND_PRINCIPAL_ID" \
+        --assignee-principal-type ServicePrincipal \
+        --role "Cognitive Services User" \
+        --scope "$AI_SERVICES_RESOURCE_ID" \
+        --output none 2>/dev/null || true
+    echo "✅ Managed identity configured with Cognitive Services User role"
+else
+    echo "⚠️  Could not configure managed identity RBAC — set up manually"
+fi
 
 # -----------------------------------------------------------------------------
 # Step 7: Rebuild Frontend with Correct Backend URL

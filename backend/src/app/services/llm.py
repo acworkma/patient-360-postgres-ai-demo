@@ -36,25 +36,28 @@ def _create_inference_client(settings):
         return project_client.inference.get_chat_completions_client()
 
     # Legacy path: direct Azure OpenAI endpoint
-    from openai import OpenAI
+    from openai import AzureOpenAI
 
     endpoint = settings.azure_openai_endpoint.rstrip('/')
-    base_url = f"{endpoint}/openai/v1/"
+    api_version = "2025-03-01-preview"  # Required for Responses API
 
     if settings.azure_openai_key:
-        return OpenAI(api_key=settings.azure_openai_key, base_url=base_url)
+        return AzureOpenAI(
+            api_key=settings.azure_openai_key,
+            azure_endpoint=endpoint,
+            api_version=api_version,
+        )
     else:
         from azure.identity import DefaultAzureCredential, get_bearer_token_provider
         credential = DefaultAzureCredential()
         token_provider = get_bearer_token_provider(
             credential, "https://cognitiveservices.azure.com/.default"
         )
-        token = token_provider()
         logger.info("Using Entra ID authentication for Azure OpenAI (legacy)")
-        return OpenAI(
-            api_key="entra-id-auth",
-            base_url=base_url,
-            default_headers={"Authorization": f"Bearer {token}"},
+        return AzureOpenAI(
+            azure_ad_token_provider=token_provider,
+            azure_endpoint=endpoint,
+            api_version=api_version,
         )
 
 
@@ -144,7 +147,7 @@ async def _generate_with_inference(
     sources: list[CopilotSource],
     settings
 ) -> Tuple[str, list[str], str]:
-    """Generate answer using Azure AI Foundry or legacy Azure OpenAI Responses API."""
+    """Generate answer using Azure AI Foundry or legacy Azure OpenAI Chat Completions API."""
     
     try:
         client = _create_inference_client(settings)
@@ -152,20 +155,22 @@ async def _generate_with_inference(
         # Build context and prompt using shared helper
         _, user_input = _build_context_and_prompt(question, patient_name, sources)
 
-        # Use the Responses API (sync call wrapped in asyncio.to_thread)
-        def _call_responses_api():
-            return client.responses.create(
+        # Use the Chat Completions API (sync call wrapped in asyncio.to_thread)
+        def _call_chat_api():
+            return client.chat.completions.create(
                 model=settings.azure_openai_chat_deployment,
-                instructions=SYSTEM_INSTRUCTIONS,
-                input=user_input,
-                max_output_tokens=1000,
+                messages=[
+                    {"role": "system", "content": SYSTEM_INSTRUCTIONS},
+                    {"role": "user", "content": user_input},
+                ],
+                max_tokens=1000,
                 temperature=0.3
             )
         
-        response = await asyncio.to_thread(_call_responses_api)
+        response = await asyncio.to_thread(_call_chat_api)
         
-        # Extract text from Responses API output
-        response_text = response.output_text
+        # Extract text from Chat Completions output
+        response_text = response.choices[0].message.content or ""
         
         # Parse the response
         answer, next_actions = _parse_llm_response(response_text)
@@ -265,13 +270,15 @@ async def _stream_with_inference(
     # Build context and prompt using shared helper
     _, user_input = _build_context_and_prompt(question, patient_name, sources)
 
-    # Call Responses API with streaming
+    # Call Chat Completions API with streaming
     def _call_streaming_api():
-        return client.responses.create(
+        return client.chat.completions.create(
             model=settings.azure_openai_chat_deployment,
-            instructions=SYSTEM_INSTRUCTIONS,
-            input=user_input,
-            max_output_tokens=1000,
+            messages=[
+                {"role": "system", "content": SYSTEM_INSTRUCTIONS},
+                {"role": "user", "content": user_input},
+            ],
+            max_tokens=1000,
             temperature=0.3,
             stream=True
         )
@@ -283,10 +290,9 @@ async def _stream_with_inference(
     full_text = ""
     
     # Stream the events
-    for event in stream:
-        if event.type == 'response.output_text.delta':
-            # Send text delta
-            delta_text = event.delta
+    for chunk in stream:
+        if chunk.choices and chunk.choices[0].delta.content:
+            delta_text = chunk.choices[0].delta.content
             full_text += delta_text
             yield f"event: delta\ndata: {json.dumps({'text': delta_text})}\n\n"
     

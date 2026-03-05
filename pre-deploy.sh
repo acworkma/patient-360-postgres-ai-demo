@@ -258,6 +258,23 @@ else
     log_ok "AI Services resource created"
 fi
 
+# Ensure custom subdomain is set (required for endpoint DNS resolution and MI auth)
+CURRENT_SUBDOMAIN=$(az cognitiveservices account show \
+    --name "$AI_SERVICES_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --query properties.customSubDomainName -o tsv 2>/dev/null || echo "")
+if [[ -z "$CURRENT_SUBDOMAIN" || "$CURRENT_SUBDOMAIN" == "None" ]]; then
+    log_info "Setting custom subdomain on AI Services: $AI_SERVICES_NAME"
+    az cognitiveservices account update \
+        --name "$AI_SERVICES_NAME" \
+        --resource-group "$RESOURCE_GROUP" \
+        --custom-domain "$AI_SERVICES_NAME" \
+        --output none
+    log_ok "Custom subdomain set: $AI_SERVICES_NAME"
+else
+    log_skip "Custom subdomain already set: $CURRENT_SUBDOMAIN"
+fi
+
 AI_SERVICES_ENDPOINT=$(az cognitiveservices account show \
     --name "$AI_SERVICES_NAME" \
     --resource-group "$RESOURCE_GROUP" \
@@ -441,15 +458,19 @@ run_migration "db/migrations/001_enable_extensions.sql"
 
 # Migration 005: Configure Azure AI — dynamically template credentials
 log_info "Templating migration 005 with provisioned credentials (managed identity)"
+# The azure_openai DB extension requires the .openai.azure.com domain (not .cognitiveservices.azure.com)
+AI_SERVICES_OPENAI_ENDPOINT=$(echo "$AI_SERVICES_ENDPOINT" | sed 's|\.cognitiveservices\.azure\.com|.openai.azure.com|; s|/$||')
+log_info "DB azure_openai endpoint: $AI_SERVICES_OPENAI_ENDPOINT"
 MIGRATION_005_TEMP=$(mktemp)
 sed \
     -e "s|https://YOUR-AI-LANGUAGE-RESOURCE.cognitiveservices.azure.com|$AI_LANGUAGE_ENDPOINT|g" \
-    -e "s|https://YOUR-OPENAI-RESOURCE.openai.azure.com|$AI_SERVICES_ENDPOINT|g" \
+    -e "s|https://YOUR-OPENAI-RESOURCE.openai.azure.com|$AI_SERVICES_OPENAI_ENDPOINT|g" \
     db/migrations/005_configure_azure_ai.sql > "$MIGRATION_005_TEMP"
 
-# Uncomment the OpenAI endpoint line (managed identity — no subscription_key needed)
+# Uncomment the OpenAI endpoint and auth_type lines (managed identity — no subscription_key needed)
 sed -i \
     -e "s|^-- SELECT azure_ai.set_setting('azure_openai.endpoint'|SELECT azure_ai.set_setting('azure_openai.endpoint'|g" \
+    -e "s|^-- SELECT azure_ai.set_setting('azure_openai.auth_type'|SELECT azure_ai.set_setting('azure_openai.auth_type'|g" \
     "$MIGRATION_005_TEMP"
 
 # If AI Services key is available, also configure it (otherwise managed identity is used)

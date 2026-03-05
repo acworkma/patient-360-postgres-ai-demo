@@ -41,6 +41,7 @@ DECLARE
     v_use_reranking BOOLEAN := false;
     v_search_terms TEXT[];
     v_candidate_count INT;
+    v_ranking_endpoint TEXT;
 BEGIN
     -- Calculate how many candidates to retrieve for reranking
     v_candidate_count := p_k * p_candidate_multiplier;
@@ -58,11 +59,10 @@ BEGIN
         ) INTO v_use_vector_search;
     END IF;
     
-    -- Check if reranking is available
+    -- Check if reranking is available (endpoint must be set AND non-empty)
     BEGIN
-        -- Test if azure_ai.rank() is configured
-        PERFORM azure_ai.get_setting('azure_ml.serverless_ranking_endpoint');
-        v_use_reranking := true;
+        v_ranking_endpoint := azure_ai.get_setting('azure_ml.serverless_ranking_endpoint');
+        v_use_reranking := (v_ranking_endpoint IS NOT NULL AND v_ranking_endpoint <> '');
     EXCEPTION WHEN OTHERS THEN
         v_use_reranking := false;
     END;
@@ -82,17 +82,17 @@ BEGIN
     
     DELETE FROM temp_candidates;
     
-    -- Insert note candidates
+    -- Insert note candidates (JOIN notes_raw for note_type)
     INSERT INTO temp_candidates
     SELECT 
         'note'::TEXT,
         np.note_id,
         CASE 
-            WHEN np.note_type = 'progress' THEN 'Progress Note'
-            WHEN np.note_type = 'lab_review' THEN 'Lab Review'
-            WHEN np.note_type = 'telephone' THEN 'Phone Encounter'
-            WHEN np.note_type = 'education' THEN 'Education Note'
-            WHEN np.note_type = 'coordination' THEN 'Care Coordination'
+            WHEN nr.note_type = 'progress' THEN 'Progress Note'
+            WHEN nr.note_type = 'lab_review' THEN 'Lab Review'
+            WHEN nr.note_type = 'telephone' THEN 'Phone Encounter'
+            WHEN nr.note_type = 'education' THEN 'Education Note'
+            WHEN nr.note_type = 'coordination' THEN 'Care Coordination'
             ELSE 'Clinical Note'
         END || ' (' || to_char(np.created_at, 'YYYY-MM-DD') || ')',
         LEFT(np.redacted_text, 500),  -- Larger snippet for reranking
@@ -107,10 +107,11 @@ BEGIN
         jsonb_build_object(
             'encounter_id', np.encounter_id,
             'created_at', np.created_at,
-            'note_type', np.note_type,
+            'note_type', nr.note_type,
             'phi_entity_count', jsonb_array_length(COALESCE(np.phi_entities, '[]'::jsonb))
         )
     FROM notes_phi np
+    JOIN notes_raw nr ON nr.note_id = np.note_id
     WHERE np.patient_id = p_patient_id;
     
     -- Insert observation candidates
@@ -177,7 +178,7 @@ BEGIN
         ),
         reranked AS (
             SELECT 
-                r.document_id::BIGINT as reranked_id,
+                r.id::BIGINT as reranked_id,
                 r.rank as rerank_position,
                 r.score as rerank_score
             FROM candidate_array ca,

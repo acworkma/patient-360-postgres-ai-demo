@@ -121,7 +121,7 @@ BEGIN
     actual_deployment := COALESCE(
         deployment_name,
         current_setting('app.embedding_deployment', true),
-        'text-embedding-ada-002'
+        'text-embedding-3-small'
     );
     
     -- Attempt to generate embedding via Azure OpenAI

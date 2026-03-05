@@ -43,9 +43,9 @@ async def retrieve_context(
                 snippet,
                 score,
                 metadata
-            FROM retrieve_context($1, $2, $3)
+            FROM retrieve_context($1::text, $2::text, $3::integer, $4::integer)
             """,
-            patient_id, query, max_results
+            patient_id, query, max_results, 3
         )
         
         # Determine retrieval method used

@@ -33,6 +33,7 @@ SELECT azure_ai.set_setting('azure_cognitive.endpoint', 'https://YOUR-AI-LANGUAG
 
 -- SELECT azure_ai.set_setting('azure_openai.endpoint', 'https://YOUR-OPENAI-RESOURCE.openai.azure.com');
 -- SELECT azure_ai.set_setting('azure_openai.subscription_key', 'YOUR-AZURE-OPENAI-KEY');
+-- SELECT azure_ai.set_setting('azure_openai.auth_type', 'managed-identity');
 
 -- ============================================================================
 -- VERIFY CONFIGURATION
