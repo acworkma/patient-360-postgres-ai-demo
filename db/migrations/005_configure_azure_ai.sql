@@ -4,33 +4,32 @@
 -- This script configures the azure_ai extension with Azure AI Language 
 -- and Azure OpenAI credentials for PHI redaction and embeddings.
 --
--- IMPORTANT: Run this script BEFORE 030_seed.sql
+-- Authentication: Uses Managed Identity (Entra ID) by default.
+-- The PostgreSQL server's system-assigned managed identity must have
+-- the "Cognitive Services User" RBAC role on the AI resources.
+-- Only the endpoints are configured here; no API keys are needed.
 --
--- Replace the placeholder values below with your actual Azure credentials.
+-- IMPORTANT: Run this script BEFORE 030_seed.sql
 -- ============================================================================
 
 -- ============================================================================
 -- AZURE AI LANGUAGE CONFIGURATION (Required for PHI Redaction)
 -- ============================================================================
--- Get these values from your Azure AI Language resource in the Azure Portal:
--- - Endpoint: Found in "Keys and Endpoint" section
--- - Key: Found in "Keys and Endpoint" section (use Key 1 or Key 2)
+-- Authentication via Managed Identity: only the endpoint is needed.
+-- Ensure the PostgreSQL server's managed identity has "Cognitive Services User"
+-- role on the AI Language resource.
 
 -- Set the Azure AI Language endpoint
 SELECT azure_ai.set_setting('azure_cognitive.endpoint', 'https://YOUR-AI-LANGUAGE-RESOURCE.cognitiveservices.azure.com');
 
--- Set the Azure AI Language subscription key
-SELECT azure_ai.set_setting('azure_cognitive.subscription_key', 'YOUR-AZURE-AI-LANGUAGE-KEY');
+-- NOTE: No subscription_key is set — the azure_ai extension will authenticate
+-- using the PostgreSQL server's managed identity automatically.
 
 -- ============================================================================
 -- AZURE OPENAI CONFIGURATION (Optional - for Embeddings)
 -- ============================================================================
--- Get these values from your Azure OpenAI resource in the Azure Portal:
--- - Endpoint: Found in "Keys and Endpoint" section  
--- - Key: Found in "Keys and Endpoint" section
--- - Deployment: The name of your text-embedding model deployment
-
--- Uncomment and configure these if you want vector embeddings:
+-- For managed identity: only set the endpoint (no subscription_key).
+-- For key-based auth: uncomment both the endpoint and subscription_key lines.
 
 -- SELECT azure_ai.set_setting('azure_openai.endpoint', 'https://YOUR-OPENAI-RESOURCE.openai.azure.com');
 -- SELECT azure_ai.set_setting('azure_openai.subscription_key', 'YOUR-AZURE-OPENAI-KEY');
@@ -58,9 +57,9 @@ BEGIN
     END IF;
     
     IF NOT v_has_key THEN
-        RAISE WARNING 'Azure AI Language subscription key not configured!';
+        RAISE NOTICE 'Azure AI Language subscription key not set — using managed identity authentication';
     ELSE
-        RAISE NOTICE 'Azure AI Language subscription key is set';
+        RAISE NOTICE 'Azure AI Language subscription key is set (key-based auth)';
     END IF;
     
     -- Check Azure OpenAI settings (optional)
@@ -89,9 +88,10 @@ SELECT * FROM azure_cognitive.recognize_pii_entities(
 -- NOTES
 -- ============================================================================
 -- 1. Settings are stored at the server level and persist across sessions
--- 2. For production, consider using Azure Managed Identity instead of keys
--- 3. To use Managed Identity, don't set subscription_key and ensure your
---    PostgreSQL server has a managed identity with proper RBAC roles
--- 4. For Managed Identity, grant "Cognitive Services User" role to the
+-- 2. This configuration uses Managed Identity (Entra ID) by default
+-- 3. When subscription_key is not set, the azure_ai extension authenticates
+--    using the PostgreSQL server's system-assigned managed identity
+-- 4. Ensure "Cognitive Services User" RBAC role is granted to the
 --    PostgreSQL managed identity on your Azure AI Language resource
+-- 5. For key-based auth (if policy allows), set the subscription_key setting
 -- ============================================================================

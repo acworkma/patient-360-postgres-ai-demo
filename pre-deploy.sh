@@ -26,7 +26,8 @@ set -euo pipefail
 RESOURCE_GROUP="${RESOURCE_GROUP:-patient360-rg}"
 LOCATION="${LOCATION:-eastus2}"
 
-# PostgreSQL
+# PostgreSQL (deployed to a separate region if PG is restricted in LOCATION)
+PG_LOCATION="${PG_LOCATION:-centralus}"
 PG_SERVER_NAME="${PG_SERVER_NAME:-patient360-pgserver}"
 PG_ADMIN_USER="${PG_ADMIN_USER:-pgadmin}"
 PG_ADMIN_PASSWORD="${PG_ADMIN_PASSWORD:-}"
@@ -126,21 +127,30 @@ log_step "Provisioning PostgreSQL Flexible Server: $PG_SERVER_NAME"
 if resource_exists "postgres flexible-server" --name "$PG_SERVER_NAME" --resource-group "$RESOURCE_GROUP"; then
     log_skip "PostgreSQL server $PG_SERVER_NAME"
 else
+    log_info "Using PG_LOCATION=$PG_LOCATION (main LOCATION=$LOCATION)"
     az postgres flexible-server create \
         --name "$PG_SERVER_NAME" \
         --resource-group "$RESOURCE_GROUP" \
-        --location "$LOCATION" \
+        --location "$PG_LOCATION" \
         --sku-name "$PG_SKU" \
         --version "$PG_VERSION" \
         --storage-size "$PG_STORAGE_SIZE" \
         --admin-user "$PG_ADMIN_USER" \
         --admin-password "$PG_ADMIN_PASSWORD" \
-        --database-name "$PG_DATABASE_NAME" \
         --public-access 0.0.0.0 \
         --yes \
         --output none
     log_ok "PostgreSQL server created"
 fi
+
+# Create the database if it doesn't exist
+log_info "Ensuring database $PG_DATABASE_NAME exists"
+az postgres flexible-server db create \
+    --server-name "$PG_SERVER_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --database-name "$PG_DATABASE_NAME" \
+    --output none 2>/dev/null || true
+log_ok "Database $PG_DATABASE_NAME ready"
 
 # Allowlist extensions
 log_info "Allowlisting azure_ai and vector extensions"
@@ -170,6 +180,27 @@ fi
 
 PG_HOST="${PG_SERVER_NAME}.postgres.database.azure.com"
 
+# Enable system-assigned managed identity on PostgreSQL server
+log_info "Enabling system-assigned managed identity on PostgreSQL server"
+az postgres flexible-server identity assign \
+    --server-name "$PG_SERVER_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --output none 2>/dev/null || true
+PG_IDENTITY_ID=$(az postgres flexible-server identity list \
+    --server-name "$PG_SERVER_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --query 'userAssignedIdentities || {"system": {"principalId": null}}' -o tsv 2>/dev/null || echo "")
+# For system-assigned MI, get the principal ID from the server resource itself
+PG_PRINCIPAL_ID=$(az postgres flexible-server show \
+    --name "$PG_SERVER_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --query identity.principalId -o tsv 2>/dev/null || echo "")
+if [[ -z "$PG_PRINCIPAL_ID" || "$PG_PRINCIPAL_ID" == "None" ]]; then
+    log_warn "Could not retrieve PG managed identity principal ID — RBAC role assignment may need to be done manually"
+else
+    log_ok "PostgreSQL managed identity principal: $PG_PRINCIPAL_ID"
+fi
+
 # =============================================================================
 # Step 4: Azure AI Language
 # =============================================================================
@@ -193,11 +224,23 @@ AI_LANGUAGE_ENDPOINT=$(az cognitiveservices account show \
     --name "$AI_LANGUAGE_NAME" \
     --resource-group "$RESOURCE_GROUP" \
     --query properties.endpoint -o tsv)
-AI_LANGUAGE_KEY=$(az cognitiveservices account keys list \
+AI_LANGUAGE_RESOURCE_ID=$(az cognitiveservices account show \
     --name "$AI_LANGUAGE_NAME" \
     --resource-group "$RESOURCE_GROUP" \
-    --query key1 -o tsv)
+    --query id -o tsv)
 log_ok "AI Language endpoint: $AI_LANGUAGE_ENDPOINT"
+
+# Grant "Cognitive Services User" role to PG managed identity on AI Language
+if [[ -n "$PG_PRINCIPAL_ID" && "$PG_PRINCIPAL_ID" != "None" ]]; then
+    log_info "Granting Cognitive Services User role on AI Language to PG managed identity"
+    az role assignment create \
+        --assignee-object-id "$PG_PRINCIPAL_ID" \
+        --assignee-principal-type ServicePrincipal \
+        --role "Cognitive Services User" \
+        --scope "$AI_LANGUAGE_RESOURCE_ID" \
+        --output none 2>/dev/null || true
+    log_ok "RBAC role assigned on AI Language"
+fi
 
 # =============================================================================
 # Step 5: Azure AI Services (multi-service resource for OpenAI-compatible API)
@@ -222,11 +265,31 @@ AI_SERVICES_ENDPOINT=$(az cognitiveservices account show \
     --name "$AI_SERVICES_NAME" \
     --resource-group "$RESOURCE_GROUP" \
     --query properties.endpoint -o tsv)
+AI_SERVICES_RESOURCE_ID_FOR_RBAC=$(az cognitiveservices account show \
+    --name "$AI_SERVICES_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --query id -o tsv)
+# Try to get the key; if disableLocalAuth is enabled, fall back to managed identity
 AI_SERVICES_KEY=$(az cognitiveservices account keys list \
     --name "$AI_SERVICES_NAME" \
     --resource-group "$RESOURCE_GROUP" \
-    --query key1 -o tsv)
+    --query key1 -o tsv 2>/dev/null || echo "")
 log_ok "AI Services endpoint: $AI_SERVICES_ENDPOINT"
+if [[ -z "$AI_SERVICES_KEY" ]]; then
+    log_info "AI Services key not available (disableLocalAuth policy) — using managed identity"
+fi
+
+# Grant "Cognitive Services User" role to PG managed identity on AI Services
+if [[ -n "$PG_PRINCIPAL_ID" && "$PG_PRINCIPAL_ID" != "None" ]]; then
+    log_info "Granting Cognitive Services User role on AI Services to PG managed identity"
+    az role assignment create \
+        --assignee-object-id "$PG_PRINCIPAL_ID" \
+        --assignee-principal-type ServicePrincipal \
+        --role "Cognitive Services User" \
+        --scope "$AI_SERVICES_RESOURCE_ID_FOR_RBAC" \
+        --output none 2>/dev/null || true
+    log_ok "RBAC role assigned on AI Services"
+fi
 
 # =============================================================================
 # Step 6: Deploy models via AI Services
@@ -359,24 +422,29 @@ run_migration() {
 run_migration "db/migrations/001_enable_extensions.sql"
 
 # Migration 005: Configure Azure AI — dynamically template credentials
-log_info "Templating migration 005 with provisioned credentials"
+log_info "Templating migration 005 with provisioned credentials (managed identity)"
 MIGRATION_005_TEMP=$(mktemp)
 sed \
     -e "s|https://YOUR-AI-LANGUAGE-RESOURCE.cognitiveservices.azure.com|$AI_LANGUAGE_ENDPOINT|g" \
-    -e "s|YOUR-AZURE-AI-LANGUAGE-KEY|$AI_LANGUAGE_KEY|g" \
     -e "s|https://YOUR-OPENAI-RESOURCE.openai.azure.com|$AI_SERVICES_ENDPOINT|g" \
-    -e "s|YOUR-AZURE-OPENAI-KEY|$AI_SERVICES_KEY|g" \
     db/migrations/005_configure_azure_ai.sql > "$MIGRATION_005_TEMP"
 
-# Uncomment the OpenAI settings lines (they're commented out by default)
+# Uncomment the OpenAI endpoint line (managed identity — no subscription_key needed)
 sed -i \
     -e "s|^-- SELECT azure_ai.set_setting('azure_openai.endpoint'|SELECT azure_ai.set_setting('azure_openai.endpoint'|g" \
-    -e "s|^-- SELECT azure_ai.set_setting('azure_openai.subscription_key'|SELECT azure_ai.set_setting('azure_openai.subscription_key'|g" \
     "$MIGRATION_005_TEMP"
+
+# If AI Services key is available, also configure it (otherwise managed identity is used)
+if [[ -n "$AI_SERVICES_KEY" ]]; then
+    sed -i \
+        -e "s|YOUR-AZURE-OPENAI-KEY|$AI_SERVICES_KEY|g" \
+        -e "s|^-- SELECT azure_ai.set_setting('azure_openai.subscription_key'|SELECT azure_ai.set_setting('azure_openai.subscription_key'|g" \
+        "$MIGRATION_005_TEMP"
+fi
 
 psql "$PGCONNSTR" -f "$MIGRATION_005_TEMP" -v ON_ERROR_STOP=1 > /dev/null 2>&1
 rm -f "$MIGRATION_005_TEMP"
-log_ok "005_configure_azure_ai.sql (templated)"
+log_ok "005_configure_azure_ai.sql (templated with managed identity)"
 
 # Remaining migrations
 run_migration "db/migrations/010_schema.sql"
@@ -434,9 +502,9 @@ DB_NAME=${PG_DATABASE_NAME}
 DB_USER=${PG_ADMIN_USER}
 DB_PASSWORD=${PG_ADMIN_PASSWORD}
 
-# Azure AI Language (PHI redaction)
+# Azure AI Language (PHI redaction — uses managed identity, no key needed)
 AZURE_AI_ENDPOINT=${AI_LANGUAGE_ENDPOINT}
-AZURE_AI_KEY=${AI_LANGUAGE_KEY}
+AZURE_AI_KEY=
 
 # Azure AI Services (OpenAI-compatible endpoint for DB extensions)
 AZURE_AI_SERVICES_ENDPOINT=${AI_SERVICES_ENDPOINT}
@@ -453,6 +521,7 @@ AZURE_OPENAI_EMBEDDING_DEPLOYMENT=${EMBEDDING_MODEL}
 # Resource identifiers (for deploy-azure.sh)
 RESOURCE_GROUP=${RESOURCE_GROUP}
 LOCATION=${LOCATION}
+PG_LOCATION=${PG_LOCATION}
 EOF
 
 log_ok "$ENV_OUTPUT_FILE written"
@@ -466,7 +535,7 @@ echo "  Pre-deployment Complete!"
 echo "============================================================================="
 echo ""
 echo "  Resource Group:      $RESOURCE_GROUP ($LOCATION)"
-echo "  PostgreSQL Server:   $PG_HOST"
+echo "  PostgreSQL Server:   $PG_HOST ($PG_LOCATION)"
 echo "  PostgreSQL Database: $PG_DATABASE_NAME"
 echo "  AI Language:         $AI_LANGUAGE_ENDPOINT"
 echo "  AI Services:         $AI_SERVICES_ENDPOINT"
@@ -477,10 +546,9 @@ echo "  Patients Seeded:     $PATIENT_COUNT"
 echo ""
 echo "  Output written to:   $ENV_OUTPUT_FILE"
 echo ""
+echo "  Auth model:          Managed Identity (Entra ID) for AI Language & AI Services"
+echo ""
 echo "  Next step:"
 echo "    ./deploy-azure.sh"
-echo ""
-echo "  For production, consider switching to Entra ID managed identity"
-echo "  instead of API keys. See README.md for details."
 echo ""
 echo "============================================================================="

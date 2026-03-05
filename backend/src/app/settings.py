@@ -18,9 +18,9 @@ class Settings(BaseSettings):
     db_pool_min_size: int = 2
     db_pool_max_size: int = 10
     
-    # Azure AI Language (for PHI redaction)
+    # Azure AI Language (for PHI redaction — key optional when using managed identity)
     azure_ai_endpoint: str
-    azure_ai_key: str
+    azure_ai_key: Optional[str] = None
     
     # Azure AI Foundry Project (for chat and embeddings via Foundry inference)
     azure_ai_project_connection_string: Optional[str] = None

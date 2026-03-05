@@ -44,7 +44,7 @@ DB_PASSWORD="${DB_PASSWORD:-your-password}"
 
 # Azure AI Services (set by pre-deploy.sh or override here)
 AZURE_AI_ENDPOINT="${AZURE_AI_ENDPOINT:-https://your-ai.cognitiveservices.azure.com}"
-AZURE_AI_KEY="${AZURE_AI_KEY:-your-azure-ai-key}"
+AZURE_AI_KEY="${AZURE_AI_KEY:-}"  # Optional: omit when using managed identity
 
 # Azure AI Foundry / AI Services (set by pre-deploy.sh or override here)
 AZURE_AI_SERVICES_ENDPOINT="${AZURE_AI_SERVICES_ENDPOINT:-}"
@@ -142,7 +142,6 @@ az containerapp create \
     --env-vars \
         DATABASE_URL="$DATABASE_URL" \
         AZURE_AI_ENDPOINT="$AZURE_AI_ENDPOINT" \
-        AZURE_AI_KEY="$AZURE_AI_KEY" \
         AZURE_AI_PROJECT_CONNECTION_STRING="$AZURE_AI_PROJECT_ENDPOINT" \
         AZURE_OPENAI_ENDPOINT="$AZURE_AI_SERVICES_ENDPOINT" \
         AZURE_OPENAI_CHAT_DEPLOYMENT="$AZURE_OPENAI_CHAT_DEPLOYMENT" \
