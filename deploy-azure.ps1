@@ -42,9 +42,9 @@ $DB_NAME = if ($env:DB_NAME) { $env:DB_NAME } else { "patient360" }
 $DB_USER = if ($env:DB_USER) { $env:DB_USER } else { "pgadmin" }
 $DB_PASSWORD = if ($env:DB_PASSWORD) { $env:DB_PASSWORD } else { throw "Set `$env:DB_PASSWORD before running" }
 
-# Azure AI Language
+# Azure AI Language (managed identity — key is optional)
 $AZURE_AI_ENDPOINT = if ($env:AZURE_AI_ENDPOINT) { $env:AZURE_AI_ENDPOINT } else { "https://your-language-service.cognitiveservices.azure.com" }
-$AZURE_AI_KEY = if ($env:AZURE_AI_KEY) { $env:AZURE_AI_KEY } else { throw "Set `$env:AZURE_AI_KEY before running" }
+$AZURE_AI_KEY = if ($env:AZURE_AI_KEY) { $env:AZURE_AI_KEY } else { "" }  # Optional: omit when using managed identity
 
 # Azure AI Foundry / AI Services (set by pre-deploy.ps1 or override here)
 $AZURE_AI_SERVICES_ENDPOINT = if ($env:AZURE_AI_SERVICES_ENDPOINT) { $env:AZURE_AI_SERVICES_ENDPOINT } else { "" }
@@ -140,7 +140,6 @@ az containerapp create `
     --env-vars `
         "DATABASE_URL=$DATABASE_URL" `
         "AZURE_AI_ENDPOINT=$AZURE_AI_ENDPOINT" `
-        "AZURE_AI_KEY=$AZURE_AI_KEY" `
         "AZURE_AI_PROJECT_CONNECTION_STRING=$AZURE_AI_PROJECT_ENDPOINT" `
         "AZURE_OPENAI_ENDPOINT=$AZURE_AI_SERVICES_ENDPOINT" `
         "AZURE_OPENAI_CHAT_DEPLOYMENT=$AZURE_OPENAI_CHAT_DEPLOYMENT" `
