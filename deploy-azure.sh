@@ -56,6 +56,9 @@ AZURE_AI_PROJECT_ENDPOINT="${AZURE_AI_PROJECT_ENDPOINT:-}"
 AZURE_OPENAI_CHAT_DEPLOYMENT="${AZURE_OPENAI_CHAT_DEPLOYMENT:-gpt-4o}"
 AZURE_OPENAI_EMBEDDING_DEPLOYMENT="${AZURE_OPENAI_EMBEDDING_DEPLOYMENT:-text-embedding-3-small}"
 
+# Demo settings
+DEMO_ALLOW_RAW="${DEMO_ALLOW_RAW:-true}"
+
 # -----------------------------------------------------------------------------
 # Step 1: Create Resource Group
 # -----------------------------------------------------------------------------
@@ -160,7 +163,7 @@ if az containerapp show --name $BACKEND_APP_NAME --resource-group $RESOURCE_GROU
             AZURE_OPENAI_CHAT_DEPLOYMENT="$AZURE_OPENAI_CHAT_DEPLOYMENT" \
             AZURE_OPENAI_EMBEDDING_DEPLOYMENT="$AZURE_OPENAI_EMBEDDING_DEPLOYMENT" \
             CORS_ORIGINS="https://${FRONTEND_APP_NAME}.azurewebsites.net,http://localhost:3000" \
-            DEMO_ALLOW_RAW="false" \
+            DEMO_ALLOW_RAW="$DEMO_ALLOW_RAW" \
         --output none
 else
     az containerapp create \
@@ -185,7 +188,7 @@ else
             AZURE_OPENAI_CHAT_DEPLOYMENT="$AZURE_OPENAI_CHAT_DEPLOYMENT" \
             AZURE_OPENAI_EMBEDDING_DEPLOYMENT="$AZURE_OPENAI_EMBEDDING_DEPLOYMENT" \
             CORS_ORIGINS="https://${FRONTEND_APP_NAME}.azurewebsites.net,http://localhost:3000" \
-            DEMO_ALLOW_RAW="false" \
+            DEMO_ALLOW_RAW="$DEMO_ALLOW_RAW" \
         --output none
 fi
 
