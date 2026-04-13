@@ -13,10 +13,14 @@ from typing import AsyncGenerator, Optional
 from urllib.parse import urlparse, parse_qs, unquote
 
 import pg8000.native
+from azure.identity import DefaultAzureCredential
 
 from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
+
+# Entra ID token credential (reused across connections)
+_credential: Optional[DefaultAzureCredential] = None
 
 # Connection pool (simple list-based pool)
 _pool: list[pg8000.native.Connection] = []
@@ -41,12 +45,19 @@ def _convert_params(query: str, args: tuple) -> tuple[str, dict]:
     return converted_query, params_dict
 
 
+def _get_entra_token() -> str:
+    """Get an Entra ID access token for PostgreSQL."""
+    global _credential
+    if _credential is None:
+        _credential = DefaultAzureCredential()
+    token = _credential.get_token("https://ossrdbms-aad.database.windows.net/.default")
+    return token.token
+
+
 def _parse_database_url(url: str) -> dict:
     """Parse database URL into connection parameters."""
     parsed = urlparse(url)
     
-    # URL decode username and password
-    password = unquote(parsed.password) if parsed.password else ""
     username = unquote(parsed.username) if parsed.username else "postgres"
     
     params = {
@@ -54,10 +65,10 @@ def _parse_database_url(url: str) -> dict:
         "port": parsed.port or 5432,
         "database": parsed.path.lstrip("/") if parsed.path else "postgres",
         "user": username,
-        "password": password,
+        "password": _get_entra_token(),
     }
     
-    logger.info(f"Connecting to {params['host']}:{params['port']}/{params['database']} as {params['user']}")
+    logger.info(f"Connecting to {params['host']}:{params['port']}/{params['database']} as {params['user']} (Entra ID)")
     
     # Parse query parameters for SSL
     query_params = parse_qs(parsed.query)

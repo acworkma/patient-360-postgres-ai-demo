@@ -1,5 +1,5 @@
 # Backend dependencies for Patient 360
-# Python 3.11+
+# Python 3.12+
 
 # Web framework
 fastapi>=0.109.0
@@ -16,8 +16,15 @@ pydantic-settings>=2.1.0
 # Azure AI Foundry (replaces deprecated standalone Azure OpenAI)
 azure-ai-projects>=2.0.0b1
 azure-ai-textanalytics>=5.3.0
-azure-identity>=1.15.0
+azure-identity>=1.21.0
 
 # Utilities
 python-dotenv>=1.0.0
 httpx>=0.26.0
+
+# Pinned for security (Defender for Cloud remediation)
+cryptography>=45.0
+PyJWT>=2.10
+requests>=2.32.4
+wheel>=0.45
+Pygments>=2.19

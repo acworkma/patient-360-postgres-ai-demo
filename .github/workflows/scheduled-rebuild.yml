@@ -1,0 +1,87 @@
+name: Scheduled Rebuild
+
+on:
+  schedule:
+    - cron: "0 6 * * 0" # Sunday 6am UTC
+  workflow_dispatch: # Allow manual trigger
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  rebuild-backend:
+    runs-on: ubuntu-latest
+    env:
+      RESOURCE_GROUP: patient360-rg
+      ACR_NAME: patient360acr3590
+      CONTAINER_APP_NAME: patient360-backend
+      IMAGE_NAME: patient360-backend
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Log in to ACR
+        run: az acr login --name $ACR_NAME
+
+      - name: Build and push backend image
+        run: |
+          docker build -t $ACR_NAME.azurecr.io/$IMAGE_NAME:${{ github.sha }} \
+                        -t $ACR_NAME.azurecr.io/$IMAGE_NAME:latest \
+                        -f backend/Dockerfile backend/
+          docker push $ACR_NAME.azurecr.io/$IMAGE_NAME --all-tags
+
+      - name: Update Container App
+        run: |
+          az containerapp update \
+            --name $CONTAINER_APP_NAME \
+            --resource-group $RESOURCE_GROUP \
+            --image $ACR_NAME.azurecr.io/$IMAGE_NAME:latest
+
+  rebuild-frontend:
+    runs-on: ubuntu-latest
+    env:
+      RESOURCE_GROUP: patient360-rg
+      ACR_NAME: patient360acr3590
+      WEBAPP_NAME: patient360-frontend-app
+      IMAGE_NAME: patient360-frontend
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Log in to ACR
+        run: az acr login --name $ACR_NAME
+
+      - name: Build and push frontend image
+        run: |
+          BACKEND_URL=$(az containerapp show --name patient360-backend --resource-group $RESOURCE_GROUP --query "properties.configuration.ingress.fqdn" -o tsv)
+          docker build -t $ACR_NAME.azurecr.io/$IMAGE_NAME:${{ github.sha }} \
+                        -t $ACR_NAME.azurecr.io/$IMAGE_NAME:latest \
+                        --build-arg NEXT_PUBLIC_API_BASE_URL=https://$BACKEND_URL \
+                        -f frontend/Dockerfile frontend/
+          docker push $ACR_NAME.azurecr.io/$IMAGE_NAME --all-tags
+
+      - name: Restart Web App
+        run: az webapp restart --name $WEBAPP_NAME --resource-group $RESOURCE_GROUP
